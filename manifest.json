@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "YTPillowPlay",
-  "description": "Control YouTube Music from bed. Arrow keys for seek/skip/volume + voice search with M key. No clicking needed.",
+  "name": "YTPlay",
+  "description": "Supercharge YouTube Music with keyboard shortcuts and voice search. Arrow keys for seek, skip & volume. Press M for multilingual voice search. No clicking needed.",
   "version": "3.0.0",
   "permissions": [],
   "host_permissions": [

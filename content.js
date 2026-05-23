@@ -613,7 +613,7 @@
 
     const btn = document.createElement("button");
     btn.id = "ytms-mic-btn";
-    btn.title = "YTPillowPlay — Voice Search (M)";
+    btn.title = "YTPlay — Voice Search (M)";
     btn.innerHTML = `
       <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
         <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5z"/>
@@ -665,5 +665,5 @@
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  console.log("[YTPillowPlay] v3.0 loaded ✓");
+  console.log("[YTPlay] v3.0 loaded ✓");
 })();

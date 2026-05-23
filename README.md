@@ -1,8 +1,8 @@
-# YTPillowPlay 🛏️
+# YTPlay 🎵
 
-Control YouTube Music without lifting a finger. Built for those cozy nights when getting up to skip a song feels like too much effort.
+Supercharge YouTube Music with keyboard shortcuts and multilingual voice search.
 
-A lightweight Chrome extension that adds keyboard shortcuts and voice search to YouTube Music's web player — so you can control everything from bed.
+A lightweight Chrome extension that adds keyboard shortcuts and voice search to YouTube Music's web player — no clicking needed.
 
 ## Features
 
@@ -43,7 +43,7 @@ Hindi, English, Spanish, Korean, Japanese, French, Arabic, Portuguese, German, C
 2. Open Chrome → `chrome://extensions`
 3. Enable **Developer mode** (toggle in top-right)
 4. Click **"Load unpacked"**
-5. Select the `YTPillowPlay` folder
+5. Select the `YTPlay` folder
 6. Go to [music.youtube.com](https://music.youtube.com) and enjoy!
 
 ## How It Works
@@ -74,11 +74,9 @@ Hindi, English, Spanish, Korean, Japanese, French, Arabic, Portuguese, German, C
 
 ## Why I Built This
 
-I listen to music on YouTube Music every night lying in bed. Changing songs required sitting up, finding the tiny skip button on the trackpad, and clicking precisely. By then I'd be fully awake and the vibe would be gone.
+YouTube Music's web player lacks keyboard shortcuts that work without focusing the player, and has no voice search (unlike the mobile app). I wanted hands-free control — skip songs, adjust volume, and search by voice without touching the mouse.
 
-So one Saturday morning, I built this. Now I control everything with my eyes closed.
-
-Sometimes laziness is the mother of invention.
+So I built YTPlay. Now I control everything with keyboard shortcuts and voice commands.
 
 ## License
 
