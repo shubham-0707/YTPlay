@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "YTPillowPlay",
+  "description": "Control YouTube Music from bed. Arrow keys for seek/skip/volume + voice search with M key. No clicking needed.",
+  "version": "3.0.0",
+  "permissions": [],
+  "host_permissions": [
+    "https://translate.googleapis.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["*://music.youtube.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
