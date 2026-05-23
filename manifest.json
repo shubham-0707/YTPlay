@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTPlay",
-  "description": "Supercharge YouTube Music with keyboard shortcuts and voice search. Arrow keys for seek, skip & volume. Press M for multilingual voice search. No clicking needed.",
+  "description": "Keyboard shortcuts & voice search for YouTube Music. Arrow keys to seek/skip/volume, M for mic.",
   "version": "3.0.0",
   "permissions": [],
   "host_permissions": [
