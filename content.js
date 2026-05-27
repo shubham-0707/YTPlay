@@ -665,5 +665,412 @@
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  console.log("[YTPlay] v3.0 loaded ✓");
+  // ─── Spotify-like Synced Lyrics (LRCLIB) v6.1 ────────────────────────
+
+  (function initLyrics() {
+    /**
+     * ARCHITECTURE v7.0 — "Event-Driven + Single Source of Truth"
+     *
+     * Key principles:
+     * - videoId is the SOLE source of truth for song identity
+     * - MutationObserver on title element for instant change detection
+     * - video `timeupdate` event drives lyrics sync (no polling for highlight)
+     * - video `loadstart`/`playing` events detect stream readiness
+     * - Generation counter discards stale async work
+     * - NEVER pause or interfere with playback
+     */
+
+    let loadedForVideoId = "";
+    let loadGeneration = 0;
+    let isLoading = false;
+    let timings = [];
+    let lineEls = [];
+    let isSynced = false;
+    let activeLine = -1;
+    let lastVideoId = "";        // Last videoId we acted on (dedup)
+    let streamReady = false;     // Whether new stream has started (currentTime reset)
+
+    // Lyrics cache: avoids re-fetching on tab switches
+    const lyricsCache = new Map(); // "title|artist" → lrc result
+
+    function getCurrentVideoId() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("v") || "";
+    }
+
+    function injectStyles() {
+      if (document.getElementById("ytms-lyrics-styles")) return;
+      const s = document.createElement("style");
+      s.id = "ytms-lyrics-styles";
+      s.textContent = `
+        /* Hide native lyrics ONLY when our content is present */
+        ytmusic-description-shelf-renderer:has(#ytms-lyrics-overlay) .description,
+        ytmusic-description-shelf-renderer:has(#ytms-lyrics-loader) .description {
+          visibility: hidden !important;
+          height: 0 !important;
+          overflow: hidden !important;
+          position: absolute !important;
+        }
+        #ytms-lyrics-overlay {
+          padding: 32px 8px;
+          overflow-y: auto;
+          max-height: 65vh;
+          scroll-behavior: smooth;
+          border-radius: 16px;
+          mask-image: linear-gradient(to bottom, transparent 0%, black 5%, black 90%, transparent 100%);
+          -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 5%, black 90%, transparent 100%);
+        }
+        #ytms-lyrics-overlay .ytms-line {
+          color: rgba(255,255,255,0.28);
+          font-size: 24px;
+          font-weight: 700;
+          padding: 14px 12px;
+          line-height: 1.45;
+          border-radius: 8px;
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          cursor: pointer;
+          letter-spacing: -0.3px;
+        }
+        #ytms-lyrics-overlay .ytms-line:hover {
+          color: rgba(255,255,255,0.5);
+          background: rgba(255,255,255,0.04);
+        }
+        #ytms-lyrics-overlay .ytms-line.active {
+          color: #fff;
+          font-size: 30px;
+          font-weight: 800;
+          padding: 16px 12px;
+          background: rgba(255,255,255,0.05);
+          transform: translateX(4px);
+          animation: ytms-glow 2s ease-in-out infinite;
+        }
+        #ytms-lyrics-overlay .ytms-line.past {
+          color: rgba(255,255,255,0.4);
+        }
+        #ytms-lyrics-overlay.nosync .ytms-line {
+          color: rgba(255,255,255,0.5);
+          font-size: 21px;
+          font-weight: 600;
+          cursor: default;
+        }
+        #ytms-lyrics-overlay.nosync .ytms-line:hover {
+          background: none;
+          color: rgba(255,255,255,0.5);
+        }
+        @keyframes ytms-glow {
+          0%, 100% { text-shadow: 0 0 20px rgba(255,255,255,0.1); }
+          50% { text-shadow: 0 0 40px rgba(255,255,255,0.2); }
+        }
+        #ytms-lyrics-loader {
+          display: flex; flex-direction: column; align-items: center;
+          justify-content: center; padding: 80px 0; gap: 20px;
+        }
+        #ytms-lyrics-loader .spinner {
+          width: 48px; height: 48px;
+          border: 4px solid rgba(255,255,255,0.1);
+          border-top-color: #fff; border-radius: 50%;
+          animation: ytms-spin 0.8s linear infinite;
+        }
+        #ytms-lyrics-loader .text {
+          color: rgba(255,255,255,0.5); font-size: 15px;
+          font-family: 'Google Sans', Roboto, sans-serif;
+        }
+        @keyframes ytms-spin { to { transform: rotate(360deg); } }
+      `;
+      document.head.appendChild(s);
+    }
+
+    function getTrack() {
+      const t = document.querySelector("ytmusic-player-bar .title")
+        || document.querySelector(".content-info-wrapper .title");
+      const a = document.querySelector("ytmusic-player-bar .byline")
+        || document.querySelector(".content-info-wrapper .byline");
+      return {
+        title: t ? t.textContent.trim() : "",
+        artist: a ? a.textContent.trim().split("•")[0].trim() : ""
+      };
+    }
+
+    async function fetchLRC(title, artist) {
+      if (!title) return null;
+      const cacheKey = `${title}|${artist}`;
+      if (lyricsCache.has(cacheKey)) return lyricsCache.get(cacheKey);
+      try {
+        const r = await fetch(`https://lrclib.net/api/get?${new URLSearchParams({ track_name: title, artist_name: artist })}`);
+        if (!r.ok) { lyricsCache.set(cacheKey, null); return null; }
+        const d = await r.json();
+        let result = null;
+        if (d.syncedLyrics) result = { synced: true, text: d.syncedLyrics };
+        else if (d.plainLyrics) result = { synced: false, text: d.plainLyrics };
+        lyricsCache.set(cacheKey, result);
+        return result;
+      } catch (e) {}
+      return null;
+    }
+
+    function parseLRC(text) {
+      const out = [];
+      for (const line of text.split("\n")) {
+        const m = line.match(/^\[(\d+):(\d+)\.(\d+)\]\s*(.*)/);
+        if (m && m[4].trim()) {
+          out.push({ time: +m[1] * 60 + +m[2] + +m[3] * 0.01, text: m[4].trim() });
+        }
+      }
+      return out;
+    }
+
+    function clearLyrics() {
+      document.getElementById("ytms-lyrics-overlay")?.remove();
+      document.getElementById("ytms-lyrics-loader")?.remove();
+      lineEls = [];
+      timings = [];
+      activeLine = -1;
+      isSynced = false;
+    }
+
+    /** Render lyrics into the panel. Does NOT touch playback at all. */
+    async function loadLyrics(title, artist, videoId) {
+      const thisGen = ++loadGeneration;
+      isLoading = true;
+      streamReady = false;
+
+      // Immediately clear old lyrics
+      clearLyrics();
+      loadedForVideoId = videoId;
+
+      injectStyles();
+
+      // Start fetching lyrics immediately (don't wait for panel)
+      const lrcPromise = fetchLRC(title, artist);
+
+      // Wait for panel to appear (up to 5s)
+      const panel = await new Promise((resolve) => {
+        const check = () => document.querySelector("ytmusic-description-shelf-renderer");
+        const p = check();
+        if (p) { resolve(p); return; }
+        const start = Date.now();
+        const iv = setInterval(() => {
+          const p2 = check();
+          if (p2) { clearInterval(iv); resolve(p2); return; }
+          if (Date.now() - start > 5000) { clearInterval(iv); resolve(null); }
+        }, 150);
+      });
+
+      if (!panel || thisGen !== loadGeneration) { isLoading = false; return; }
+
+      const wrapper = panel.querySelector(".wrapper") || panel;
+
+      // Show loader
+      for (const c of wrapper.children) {
+        if (c.style && c.id !== "ytms-lyrics-loader") c.style.display = "none";
+      }
+      const loader = document.createElement("div");
+      loader.id = "ytms-lyrics-loader";
+      loader.innerHTML = `<div class="spinner"></div><div class="text">Loading lyrics...</div>`;
+      wrapper.appendChild(loader);
+
+      // Await the fetch (which may already be done thanks to parallel start)
+      const lrc = await lrcPromise;
+      if (thisGen !== loadGeneration) { loader.remove(); isLoading = false; return; }
+
+      loader.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "ytms-lyrics-overlay";
+
+      if (lrc && lrc.synced) {
+        const parsed = parseLRC(lrc.text);
+        if (parsed.length > 2) {
+          isSynced = true;
+          parsed.forEach((item) => {
+            const div = document.createElement("div");
+            div.className = "ytms-line";
+            div.textContent = item.text;
+            div.addEventListener("click", () => {
+              if (getCurrentVideoId() !== videoId) return;
+              if (!streamReady) return;
+              const video = getVideo();
+              if (video) video.currentTime = item.time;
+            });
+            overlay.appendChild(div);
+            lineEls.push(div);
+            timings.push(item.time);
+          });
+        }
+      }
+
+      if (!isSynced) {
+        overlay.classList.add("nosync");
+        for (const c of wrapper.children) {
+          if (c.id !== "ytms-lyrics-overlay" && c.style) c.style.display = "";
+        }
+        const raw = (wrapper.innerText || "").replace(/\r\n/g, "\n");
+        for (const c of wrapper.children) {
+          if (c.id !== "ytms-lyrics-overlay" && c.style) c.style.display = "none";
+        }
+        const fallbackLines = (lrc && lrc.text)
+          ? lrc.text.split("\n").filter(l => l.trim())
+          : raw.split("\n").filter(l => l.trim());
+        fallbackLines.forEach(l => {
+          const div = document.createElement("div");
+          div.className = "ytms-line";
+          div.textContent = l;
+          overlay.appendChild(div);
+          lineEls.push(div);
+        });
+      }
+
+      wrapper.appendChild(overlay);
+      loadedForVideoId = videoId;
+      activeLine = -1;
+      isLoading = false;
+      // If stream is already at beginning, mark ready immediately
+      const v2 = getVideo();
+      if (v2 && v2.currentTime < 5) streamReady = true;
+    }
+
+    /** Detect song change — videoId is the single source of truth */
+    function detectAndLoad() {
+      const videoId = getCurrentVideoId();
+      if (!videoId) return;
+      if (videoId === loadedForVideoId && !isLoading) return; // Same song, nothing to do
+      if (videoId === lastVideoId && isLoading) return; // Already loading for this song
+
+      lastVideoId = videoId;
+      const { title, artist } = getTrack();
+      if (!title) {
+        // Title not ready yet, retry shortly
+        setTimeout(detectAndLoad, 300);
+        return;
+      }
+      loadLyrics(title, artist, videoId);
+    }
+
+    /** Sync highlight to current playback position */
+    function syncHighlight() {
+      if (!isSynced || lineEls.length === 0 || timings.length === 0) return;
+      if (getCurrentVideoId() !== loadedForVideoId) return;
+
+      const v = getVideo();
+      if (!v) return;
+      const ct = v.currentTime;
+
+      // Wait for stream to actually reset before syncing
+      // (after song change, currentTime may still be from previous song)
+      if (!streamReady) {
+        if (ct < 5) {
+          streamReady = true;
+        } else {
+          // Don't highlight anything — show lyrics at top, unsynced
+          if (activeLine !== -1) {
+            for (let i = 0; i < lineEls.length; i++) lineEls[i].classList.remove("active", "past");
+            activeLine = -1;
+            const overlay = document.getElementById("ytms-lyrics-overlay");
+            if (overlay) overlay.scrollTop = 0;
+          }
+          return;
+        }
+      }
+
+      // Find correct line (binary-search-like from end)
+      let idx = -1;
+      for (let i = timings.length - 1; i >= 0; i--) {
+        if (ct >= timings[i]) { idx = i; break; }
+      }
+
+      // Before first lyric — show nothing highlighted
+      if (idx < 0) {
+        if (activeLine !== -1) {
+          for (let i = 0; i < lineEls.length; i++) lineEls[i].classList.remove("active", "past");
+          activeLine = -1;
+          const overlay = document.getElementById("ytms-lyrics-overlay");
+          if (overlay) overlay.scrollTop = 0;
+        }
+        return;
+      }
+
+      if (idx !== activeLine) {
+        for (let i = 0; i < lineEls.length; i++) {
+          const el = lineEls[i];
+          if (i === idx) { el.classList.add("active"); el.classList.remove("past"); }
+          else if (i < idx) { el.classList.remove("active"); el.classList.add("past"); }
+          else { el.classList.remove("active", "past"); }
+        }
+        lineEls[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
+        activeLine = idx;
+      }
+    }
+
+    // ── Start ──
+    injectStyles();
+
+    setTimeout(() => {
+      // Hook video element for events
+      const hookVideo = () => {
+        const v = getVideo();
+        if (!v) { setTimeout(hookVideo, 500); return; }
+
+        // Use timeupdate for smooth lyrics sync (fires ~4x/sec, no polling needed)
+        v.addEventListener("timeupdate", syncHighlight);
+
+        // loadstart fires when a new source is loaded (song auto-advance)
+        v.addEventListener("loadstart", () => {
+          // Wait a bit for URL to update, then detect
+          setTimeout(detectAndLoad, 200);
+        });
+
+        // playing event confirms stream is ready
+        v.addEventListener("playing", () => {
+          // Mark stream ready if currentTime is low (new song started)
+          if (!streamReady && v.currentTime < 5) {
+            streamReady = true;
+          }
+          // If we're on a different song than what's loaded, trigger load
+          if (getCurrentVideoId() !== loadedForVideoId) {
+            detectAndLoad();
+          }
+        });
+      };
+      hookVideo();
+
+      // MutationObserver on the title element for instant detection
+      const observeTitle = () => {
+        const titleEl = document.querySelector("ytmusic-player-bar .title")
+          || document.querySelector(".content-info-wrapper .title");
+        if (!titleEl) { setTimeout(observeTitle, 500); return; }
+
+        const observer = new MutationObserver(() => {
+          // Title changed — check if videoId also changed
+          setTimeout(detectAndLoad, 100);
+        });
+        observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
+      };
+      observeTitle();
+
+      // Listen for YT Music SPA navigation
+      document.addEventListener("yt-navigate-finish", () => setTimeout(detectAndLoad, 200));
+
+      // Tab clicks (force reload when user switches tabs)
+      document.addEventListener("click", (e) => {
+        if (e.target.closest("tp-yt-paper-tab, [role='tab']")) {
+          loadedForVideoId = "";
+          lastVideoId = "";
+          setTimeout(detectAndLoad, 200);
+        }
+      }, true);
+
+      // Initial load
+      detectAndLoad();
+
+      // Fallback: low-frequency poll (every 2s) for edge cases the events miss
+      setInterval(() => {
+        if (getCurrentVideoId() !== loadedForVideoId && !isLoading) {
+          detectAndLoad();
+        }
+      }, 2000);
+    }, 300);
+
+  })();
+
+  console.log("[YTPlay] v7.0 loaded ✓");
 })();
