@@ -733,14 +733,16 @@
         }
         #ytms-lyrics-overlay .ytms-line:hover {
           color: rgba(255,255,255,0.5);
-          background: rgba(255,255,255,0.04);
+          background: rgba(255, 0, 0, 0.08);
         }
         #ytms-lyrics-overlay .ytms-line.active {
-          color: #fff;
+          background: linear-gradient(90deg, #ff0000, #ff4e45, #ff8c00);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
           font-size: 30px;
           font-weight: 800;
           padding: 16px 12px;
-          background: rgba(255,255,255,0.05);
           transform: translateX(4px);
           animation: ytms-glow 2s ease-in-out infinite;
         }
